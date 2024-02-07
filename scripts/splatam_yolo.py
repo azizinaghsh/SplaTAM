@@ -173,7 +173,7 @@ def initialize_optimizer(params, lrs_dict, tracking):
         return torch.optim.Adam(param_groups, lr=0.0, eps=1e-15)
 
 
-def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio, mean_sq_dist_method, densify_dataset=None):
+def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio, mean_sq_dist_method, densify_dataset=None, use_yolo=True, yolo_model=None):
     # Get RGB-D Data & Camera Parameters
     color, depth, intrinsics, pose = dataset[0]
 
@@ -200,6 +200,14 @@ def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio, mea
 
     # Get Initial Point Cloud (PyTorch CUDA Tensor)
     mask = (depth > 0) # Mask out invalid depth values
+    yolo_mask = torch.ones(mask.shape, dtype=torch.bool, device='cuda').detach()
+    if use_yolo:
+        yolo_result = yolo_model(color.unsqueeze(dim=0), verbose=False)[0]
+        for obj in yolo_result:
+            if obj.boxes.cls.item() == 0:
+                yolo_mask = yolo_mask & (~obj.masks.data.bool())
+        mask = mask & yolo_mask.detach()
+    
     mask = mask.reshape(-1)
     init_pt_cld, mean3_sq_dist = get_pointcloud(color, depth, densify_intrinsics, w2c, 
                                                 mask=mask, compute_mean_sq_dist=True, 
@@ -278,13 +286,14 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
     if tracking and use_sil_for_loss:
         mask = mask & presence_sil_mask
     
+    
+    yolo_mask = torch.ones(mask.shape, dtype=torch.bool, device='cuda').detach()
     if use_yolo:
-        yolo_mask = torch.ones(mask.shape, dtype=torch.bool, device='cuda')
         yolo_result = yolo_model(curr_data['im'].unsqueeze(dim=0), verbose=False)[0]
         for obj in yolo_result:
             if obj.boxes.cls.item() == 0: #TODO: Read from dict made from csv
-                yolo_mask = mask & (~obj.masks.data)
-        mask = mask & yolo_mask
+                yolo_mask = yolo_mask & (~obj.masks.data.bool())
+        mask = mask & yolo_mask.detach()
 
 
     # Depth loss
@@ -301,9 +310,12 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
         color_mask = color_mask.detach()
         losses['im'] = torch.abs(curr_data['im'] - im)[color_mask].sum()
     elif tracking:
-        losses['im'] = torch.abs(curr_data['im'] - im).sum() #TODO: Apply yolo mask
+        yolo_mask = torch.tile(yolo_mask, (3, 1, 1))
+        losses['im'] = torch.abs(curr_data['im'] - im)[yolo_mask].sum() #TODO: Apply yolo mask
     else:
-        losses['im'] = 0.8 * l1_loss_v1(im, curr_data['im']) + 0.2 * (1.0 - calc_ssim(im, curr_data['im'])) #TODO: Apply yolo mask
+        yolo_mask = torch.tile(yolo_mask, (3, 1, 1))
+        #losses['im'] = 0.8 * l1_loss_v1(im[yolo_mask], curr_data['im'][yolo_mask]) + 0.2 * (1.0 - calc_ssim(im[yolo_mask], curr_data['im'][yolo_mask])) #TODO: Apply yolo mask
+        losses['im'] = 0.8 * l1_loss_v1(im* yolo_mask.int(), curr_data['im'] * yolo_mask.int()) + 0.2 * (1.0 - calc_ssim(im*yolo_mask.int(), curr_data['im']*yolo_mask.int())) #TODO: Apply yolo mask
 
     # Visualize the Diff Images
     if tracking and visualize_tracking_loss:
@@ -317,10 +329,11 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
         viz_img = torch.clip(weighted_im.permute(1, 2, 0).detach().cpu(), 0, 1)
         ax[0, 0].imshow(viz_img)
         ax[0, 0].set_title("Weighted GT RGB")
-        viz_render_img = torch.clip(weighted_render_im.permute(1, 2, 0).detach().cpu(), 0, 1)
+        viz_render_img = torch.clip(im.permute(1, 2, 0).detach().cpu(), 0, 1)
         ax[1, 0].imshow(viz_render_img)
         ax[1, 0].set_title("Weighted Rendered RGB")
-        ax[0, 1].imshow(weighted_depth[0].detach().cpu(), cmap="jet", vmin=0, vmax=6)
+        #ax[0, 1].imshow(weighted_depth[0].detach().cpu(), cmap="jet", vmin=0, vmax=6)
+        ax[0, 1].imshow(yolo_mask.squeeze(0).cpu())
         ax[0, 1].set_title("Weighted GT Depth")
         ax[1, 1].imshow(weighted_render_depth[0].detach().cpu(), cmap="jet", vmin=0, vmax=6)
         ax[1, 1].set_title("Weighted Rendered Depth")
@@ -385,7 +398,7 @@ def initialize_new_params(new_pt_cld, mean3_sq_dist):
     return params
 
 
-def add_new_gaussians(params, variables, curr_data, sil_thres, time_idx, mean_sq_dist_method):
+def add_new_gaussians(params, variables, curr_data, sil_thres, time_idx, mean_sq_dist_method, use_yolo=True, yolo_model=None):
     # Silhouette Rendering
     transformed_pts = transform_to_frame(params, time_idx, gaussians_grad=False, camera_grad=False)
     depth_sil_rendervar = transformed_params2depthplussilhouette(params, curr_data['w2c'],
@@ -401,8 +414,15 @@ def add_new_gaussians(params, variables, curr_data, sil_thres, time_idx, mean_sq
     # Determine non-presence mask
     non_presence_mask = non_presence_sil_mask | non_presence_depth_mask
     # Flatten mask
+    yolo_mask = torch.ones(non_presence_mask.shape, dtype=torch.bool, device='cuda').detach()
+    if use_yolo:
+        yolo_result = yolo_model(curr_data['im'].unsqueeze(dim=0), verbose=False)[0]
+        for obj in yolo_result:
+            if obj.boxes.cls.item() == 0:
+                yolo_mask = yolo_mask & (~obj.masks.data.bool())
+        non_presence_mask = non_presence_mask & yolo_mask.detach()
+    
     non_presence_mask = non_presence_mask.reshape(-1)
-
     # Get the new frame Gaussians based on the Silhouette
     if torch.sum(non_presence_mask) > 0:
         # Get the new pointcloud in the world frame
@@ -553,6 +573,7 @@ def rgbd_slam(config: dict):
     num_frames = dataset_config["num_frames"]
     if num_frames == -1:
         num_frames = len(dataset)
+    num_frames = min(num_frames, config['max_frames'])
 
     # Init seperate dataloader for densification if required
     if seperate_densification_res:
@@ -575,12 +596,14 @@ def rgbd_slam(config: dict):
             densify_intrinsics, densify_cam = initialize_first_timestep(dataset, num_frames,
                                                                         config['scene_radius_depth_ratio'],
                                                                         config['mean_sq_dist_method'],
-                                                                        densify_dataset=densify_dataset)                                                                                                                  
+                                                                        densify_dataset=densify_dataset,
+                                                                        yolo_model = yolo_model)                                                                                                                  
     else:
         # Initialize Parameters & Canoncial Camera parameters
         params, variables, intrinsics, first_frame_w2c, cam = initialize_first_timestep(dataset, num_frames, 
                                                                                         config['scene_radius_depth_ratio'],
-                                                                                        config['mean_sq_dist_method'])
+                                                                                        config['mean_sq_dist_method'],
+                                                                                        yolo_model = yolo_model)
     
     # Init seperate dataloader for tracking if required
     if seperate_tracking_res:
@@ -809,7 +832,8 @@ def rgbd_slam(config: dict):
                 # Add new Gaussians to the scene based on the Silhouette
                 params, variables = add_new_gaussians(params, variables, densify_curr_data, 
                                                       config['mapping']['sil_thres'], time_idx,
-                                                      config['mean_sq_dist_method'])
+                                                      config['mean_sq_dist_method'],
+                                                      use_yolo=True, yolo_model=yolo_model)
                 post_num_pts = params['means3D'].shape[0]
                 if config['use_wandb']:
                     wandb_run.log({"Mapping/Number of Gaussians": post_num_pts,
