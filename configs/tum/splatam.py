@@ -12,18 +12,24 @@ scene_name = scenes[int(0)]
 map_every = 1
 keyframe_every = 5
 mapping_window_size = 20
-tracking_iters = 200
+tracking_iters = 50
 mapping_iters = 30
 scene_radius_depth_ratio = 2
 
+yolo_mapping = True
+yolo_tracking = True
+
+
 group_name = "TUM"
-run_name = f"{scene_name}_seed{seed}"
+run_name = f"{scene_name}_seed{seed}_yolomap{yolo_mapping}_yolotrack{yolo_tracking}"
 
 config = dict(
     workdir=f"./experiments/{group_name}",
     run_name=run_name,
-    #max_frames=10,
+    max_frames=10,
     seed=seed,
+    yolo_mapping=yolo_mapping,
+    yolo_tracking=yolo_tracking,
     primary_device=primary_device,
     map_every=map_every, # Mapping every nth frame
     keyframe_every=keyframe_every, # Keyframe every nth frame
@@ -39,7 +45,7 @@ config = dict(
     checkpoint_interval=100, # Checkpoint Interval
     use_wandb=True,
     wandb=dict(
-        entity="mohammaddelkhah",
+        entity="azizi_delkhah",
         project="SplaTAM",
         group=group_name,
         name=run_name,

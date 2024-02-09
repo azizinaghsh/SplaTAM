@@ -1043,8 +1043,6 @@ def rgbd_slam(config: dict):
         wandb.finish()
 
 if __name__ == "__main__":
-    yolo_mapping = False
-    yolo_tracking = True
     parser = argparse.ArgumentParser()
 
     parser.add_argument("experiment", type=str, help="Path to experiment file")
@@ -1054,9 +1052,6 @@ if __name__ == "__main__":
     experiment = SourceFileLoader(
         os.path.basename(args.experiment), args.experiment
     ).load_module()
-
-    experiment.config['yolo_mapping'] = yolo_mapping
-    experiment.config['yolo_tracking'] = yolo_tracking
 
     # Set Experiment Seed
     seed_everything(seed=experiment.config['seed'])
