@@ -3,7 +3,8 @@ from os.path import join as p_join
 
 primary_device = "cuda:0"
 
-scenes = ["freiburg1_desk", "freiburg1_desk2", "freiburg1_room", "freiburg2_xyz", "freiburg3_long_office_household"]
+#scenes = ["freiburg1_desk", "freiburg1_desk2", "freiburg1_room", "freiburg2_xyz", "freiburg3_long_office_household"]
+scenes = ['freiburg3_walking_xyz']
 
 seed = int(0)
 scene_name = scenes[int(0)]
@@ -21,6 +22,7 @@ run_name = f"{scene_name}_seed{seed}"
 config = dict(
     workdir=f"./experiments/{group_name}",
     run_name=run_name,
+    #max_frames=10,
     seed=seed,
     primary_device=primary_device,
     map_every=map_every, # Mapping every nth frame
@@ -37,7 +39,7 @@ config = dict(
     checkpoint_interval=100, # Checkpoint Interval
     use_wandb=True,
     wandb=dict(
-        entity="theairlab",
+        entity="mohammaddelkhah",
         project="SplaTAM",
         group=group_name,
         name=run_name,
@@ -66,6 +68,7 @@ config = dict(
         use_uncertainty_for_loss_mask=False,
         use_uncertainty_for_loss=False,
         use_chamfer=False,
+        visualize_tracking_loss=False,
         loss_weights=dict(
             im=0.5,
             depth=1.0,
