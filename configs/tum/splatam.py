@@ -12,7 +12,7 @@ scene_name = scenes[int(0)]
 map_every = 1
 keyframe_every = 5
 mapping_window_size = 20
-tracking_iters = 50
+tracking_iters = 200
 mapping_iters = 30
 scene_radius_depth_ratio = 2
 
@@ -26,7 +26,7 @@ run_name = f"{scene_name}_seed{seed}_yolomap{yolo_mapping}_yolotrack{yolo_tracki
 config = dict(
     workdir=f"./experiments/{group_name}",
     run_name=run_name,
-    max_frames=10,
+#    max_frames=10,
     seed=seed,
     yolo_mapping=yolo_mapping,
     yolo_tracking=yolo_tracking,
