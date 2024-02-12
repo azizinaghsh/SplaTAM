@@ -48,13 +48,14 @@ for i,expr in enumerate(queue):
     cnfg = dict(
     workdir=f"./experiments/{group_name}",
     run_name=run_name,
+    scene_name=expr["scene_name"],
     max_frames=200,
     seed=seed,
     yolo_mapping=expr["yolo_mapping"],
     yolo_tracking=expr["yolo_tracking"],
     yolo_dilation=expr["yolo_dilation"],
     yolo_boxmask=expr["yolo_boxmask"],
-    inpainting = expr['inpainting']
+    inpainting = expr['inpainting'],
     primary_device=primary_device,
     map_every=map_every, # Mapping every nth frame
     keyframe_every=keyframe_every, # Keyframe every nth frame
