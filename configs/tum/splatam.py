@@ -16,13 +16,13 @@ tracking_iters = 100
 mapping_iters = 30
 scene_radius_depth_ratio = 2
 
-yolo_mapping = True
-yolo_tracking = True
+yolo_mapping = False
+yolo_tracking = False
 inpainting = True
 
 
 group_name = "TUM"
-run_name = f"{scene_name}_seed{seed}_inpainting{inpainting}"
+run_name = f"{scene_name}_seed{seed}_inpainting{inpainting}_yolo{yolo_tracking}"
 
 config = dict(
     workdir=f"./experiments/{group_name}",
@@ -31,6 +31,7 @@ config = dict(
     seed=seed,
     yolo_mapping=yolo_mapping,
     yolo_tracking=yolo_tracking,
+    inpainting=inpainting,
     primary_device=primary_device,
     map_every=map_every, # Mapping every nth frame
     keyframe_every=keyframe_every, # Keyframe every nth frame
