@@ -46,7 +46,7 @@ for i,expr in enumerate(queue):
     cnfg = dict(
     workdir=f"./experiments/{group_name}",
     run_name=run_name,
-    max_frames=200, #expr["max_frames"],
+    max_frames=200,
     seed=seed,
     yolo_mapping=expr["yolo_mapping"],
     yolo_tracking=expr["yolo_tracking"],
