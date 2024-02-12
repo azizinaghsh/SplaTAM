@@ -1,35 +1,57 @@
 import os
 from os.path import join as p_join
+import time
 
 primary_device = "cuda:0"
 
-#scenes = ["freiburg1_desk", "freiburg1_desk2", "freiburg1_room", "freiburg2_xyz", "freiburg3_long_office_household"]
-scenes = ['freiburg3_walking_xyz']
+#scenes = ["freiburg3_walking_halfsphere" ,"freiburg2_desk_with_person","freiburg3_walking_static", "freiburg3_walking_xyz", "freiburg3_sitting_rpy", "freiburg1_desk", "freiburg1_desk2", "freiburg1_room", "freiburg2_xyz", "freiburg3_long_office_household", "freiburg3_sitting_rpy"]
+# scenes = ['freiburg2_desk_with_person']
+# scene_name = scenes[int(0)]
 
 seed = int(0)
-scene_name = scenes[int(0)]
+
+time_str = time.strftime("y%ym%md%dh%Hm%M")
 
 map_every = 1
 keyframe_every = 5
 mapping_window_size = 20
-tracking_iters = 50
+tracking_iters = 100
 mapping_iters = 30
 scene_radius_depth_ratio = 2
 
-yolo_mapping = True
-yolo_tracking = True
-
+queue = [dict(scene_name="freiburg3_sitting_rpy",
+             yolo_mapping=True,
+             yolo_tracking=True,
+             yolo_boxmask=True,
+             yolo_dilation=None),
+             
+             dict(scene_name="freiburg3_sitting_rpy",
+             yolo_mapping=False,
+             yolo_tracking=True,
+             yolo_boxmask=True,
+             yolo_dilation=None)]
 
 group_name = "TUM"
-run_name = f"{scene_name}_seed{seed}_yolomap{yolo_mapping}_yolotrack{yolo_tracking}"
 
-config = dict(
+configs = []
+
+for i,expr in enumerate(queue):
+    #run_name = f"{expr["scene_name"]}_{time_str}_{i}_yolomap{expr["yolo_mapping"]}_yolotrack{expr["yolo_tracking"]}_junk"
+    run_name = expr["scene_name"]+"_" + time_str + "_" + str(i)
+    run_name += "_yolomap" + str(expr["yolo_mapping"])
+    run_name += "_yolotrack" + str(expr["yolo_tracking"])
+    run_name += "_dil"+ str(expr["yolo_dilation"])
+    run_name += "_box" if expr["yolo_boxmask"] else "_seg"
+
+    cnfg = dict(
     workdir=f"./experiments/{group_name}",
     run_name=run_name,
-    max_frames=10,
+    max_frames=200, #expr["max_frames"],
     seed=seed,
-    yolo_mapping=yolo_mapping,
-    yolo_tracking=yolo_tracking,
+    yolo_mapping=expr["yolo_mapping"],
+    yolo_tracking=expr["yolo_tracking"],
+    yolo_dilation=expr["yolo_dilation"],
+    yolo_boxmask=expr["yolo_boxmask"],
     primary_device=primary_device,
     map_every=map_every, # Mapping every nth frame
     keyframe_every=keyframe_every, # Keyframe every nth frame
@@ -54,8 +76,8 @@ config = dict(
     ),
     data=dict(
         basedir="./data/TUM_RGBD",
-        gradslam_data_cfg=f"./configs/data/TUM/{scene_name}.yaml",
-        sequence=f"rgbd_dataset_{scene_name}",
+        gradslam_data_cfg=f"./configs/data/TUM/" + expr["scene_name"]+".yaml",
+        sequence=f"rgbd_dataset_" + expr["scene_name"],
         desired_image_height=480,
         desired_image_width=640,
         start=0,
@@ -148,3 +170,4 @@ config = dict(
         enter_interactive_post_online=False, # Enter Interactive Mode after Online Recon Viz
     ),
 )
+    configs.append(cnfg)

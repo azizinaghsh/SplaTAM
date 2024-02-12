@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
+from torchvision.transforms.functional import erase as torch_erase
 from tqdm import tqdm
 import wandb
 
@@ -49,6 +50,32 @@ from utils.slam_external import calc_ssim, build_rotation, prune_gaussians, dens
 
 from diff_gaussian_rasterization import GaussianRasterizer as Renderer
 
+
+def process_yolo_mask(obj, device, shape, full_box, size):
+    mask_data = None
+    if full_box:
+        mask_data = torch.zeros(shape, device=device).detach()
+        xyxy = obj.boxes[0].xyxy[0]
+        pos = torch.floor(xyxy[:2]).int()
+        wh = torch.ceil(xyxy[2:]- pos).int()
+        mask_data = torch_erase(mask_data, pos[1], pos[0], wh[1], wh[0], 1).detach()
+    else:
+        mask_data = obj.masks.data
+
+    # dilation size
+    if size == None:
+        return mask_data
+    
+    filter = torch.ones(size, size, device="cuda")
+    # we assume mask is of size [H, W, C] otherwise permute should be removed
+    mask = mask_data.unsqueeze(0)#.permute(0, 3, 1, 2) 
+    filter = filter.unsqueeze(0).unsqueeze(0) 
+
+    output = F.conv2d(mask, filter, padding=int((size - 1) / 2)) 
+    # we assume we want to return the shape to [H, W, C] otherwise permute should be removed
+    output = output.squeeze(0)#.permute(1, 2, 0) 
+    output = torch.sign(output).squeeze(0)
+    return output
 
 def get_dataset(config_dict, basedir, sequence, **kwargs):
     if config_dict["dataset_name"].lower() in ["icl"]:
@@ -173,7 +200,9 @@ def initialize_optimizer(params, lrs_dict, tracking):
         return torch.optim.Adam(param_groups, lr=0.0, eps=1e-15)
 
 
-def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio, mean_sq_dist_method, densify_dataset=None, yolo_mapping=False, yolo_model=None):
+def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio, mean_sq_dist_method,
+                              densify_dataset=None, yolo_mapping=False, yolo_model=None,
+                               yolo_boxmask = True, yolo_dilation=None):
     # Get RGB-D Data & Camera Parameters
     color, depth, intrinsics, pose = dataset[0]
 
@@ -205,7 +234,8 @@ def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio, mea
         yolo_result = yolo_model(color.unsqueeze(dim=0), verbose=False)[0]
         for obj in yolo_result:
             if obj.boxes.cls.item() == 0:
-                yolo_mask = yolo_mask & (~obj.masks.data.bool())
+                dilated_mask = process_yolo_mask(obj, yolo_mask.device, yolo_mask.shape, yolo_boxmask, yolo_dilation)
+                yolo_mask = yolo_mask & (~dilated_mask.bool())
         mask = mask & yolo_mask.detach()
     
     mask = mask.reshape(-1)
@@ -228,7 +258,7 @@ def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio, mea
 def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_for_loss,
              sil_thres, use_l1,ignore_outlier_depth_loss, tracking=False, 
              mapping=False, do_ba=False, plot_dir=None, visualize_tracking_loss=False, tracking_iteration=None,
-             yolo_model=None, yolo_tracking=False, yolo_mapping=False):
+             yolo_model=None, yolo_tracking=False, yolo_mapping=False, yolo_boxmask=True, yolo_dilation = None):
     # Initialize Loss Dictionary
     losses = {}
 
@@ -292,7 +322,8 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
         yolo_result = yolo_model(curr_data['im'].unsqueeze(dim=0), verbose=False)[0]
         for obj in yolo_result:
             if obj.boxes.cls.item() == 0: #TODO: Read from dict made from csv
-                yolo_mask = yolo_mask & (~obj.masks.data.bool())
+                dilated_mask = process_yolo_mask(obj, yolo_mask.device, yolo_mask.shape, yolo_boxmask, yolo_dilation)
+                yolo_mask = yolo_mask & (~dilated_mask.bool())
 
 
     # Depth loss
@@ -405,7 +436,8 @@ def initialize_new_params(new_pt_cld, mean3_sq_dist):
     return params
 
 
-def add_new_gaussians(params, variables, curr_data, sil_thres, time_idx, mean_sq_dist_method, yolo_mapping=True, yolo_model=None):
+def add_new_gaussians(params, variables, curr_data, sil_thres, time_idx, mean_sq_dist_method,
+                      yolo_mapping=True, yolo_model=None, yolo_boxmask=True, yolo_dilation=None):
     # Silhouette Rendering
     transformed_pts = transform_to_frame(params, time_idx, gaussians_grad=False, camera_grad=False)
     depth_sil_rendervar = transformed_params2depthplussilhouette(params, curr_data['w2c'],
@@ -426,7 +458,8 @@ def add_new_gaussians(params, variables, curr_data, sil_thres, time_idx, mean_sq
         yolo_result = yolo_model(curr_data['im'].unsqueeze(dim=0), verbose=False)[0]
         for obj in yolo_result:
             if obj.boxes.cls.item() == 0:
-                yolo_mask = yolo_mask & (~obj.masks.data.bool())
+                dilated_mask = process_yolo_mask(obj, yolo_mask.device, yolo_mask.shape, yolo_boxmask, yolo_dilation)
+                yolo_mask = yolo_mask & (~dilated_mask.bool())
         non_presence_mask = non_presence_mask & yolo_mask.detach()
     
     non_presence_mask = non_presence_mask.reshape(-1)
@@ -520,10 +553,15 @@ def rgbd_slam(config: dict):
     #yolo init
     yolo_mapping = config['yolo_mapping']
     yolo_tracking = config['yolo_tracking']
+    yolo_dilation = config['yolo_dilation']
+    yolo_boxmask = config['yolo_boxmask']
     yolo_model = None
     if yolo_mapping or yolo_tracking:
         yolo_dir_path = '/home/toudo/'
-        yolo_model_name = 'yolov8n-seg.pt'
+        if yolo_boxmask:
+            yolo_model_name = 'yolov8n.pt'
+        else:
+            yolo_model_name = 'yolov8n-seg.pt'
         yolo_path = os.path.join(yolo_dir_path, yolo_model_name)
         if os.path.isfile(yolo_path):
             yolo_model = YOLO(yolo_path)
@@ -606,14 +644,18 @@ def rgbd_slam(config: dict):
                                                                         config['mean_sq_dist_method'],
                                                                         densify_dataset=densify_dataset,
                                                                         yolo_mapping=yolo_mapping,
-                                                                        yolo_model = yolo_model)                                                                                                                  
+                                                                        yolo_model = yolo_model,
+                                                                        yolo_boxmask=yolo_boxmask,
+                                                                        yolo_dilation=yolo_dilation)                                                                                                                  
     else:
         # Initialize Parameters & Canoncial Camera parameters
         params, variables, intrinsics, first_frame_w2c, cam = initialize_first_timestep(dataset, num_frames, 
                                                                                         config['scene_radius_depth_ratio'],
                                                                                         config['mean_sq_dist_method'],
                                                                                         yolo_mapping = yolo_mapping,
-                                                                                        yolo_model = yolo_model)
+                                                                                        yolo_model = yolo_model,
+                                                                                        yolo_boxmask=yolo_boxmask,
+                                                                                        yolo_dilation=yolo_dilation)
     
     # Init seperate dataloader for tracking if required
     if seperate_tracking_res:
@@ -745,7 +787,8 @@ def rgbd_slam(config: dict):
                                                    config['tracking']['use_sil_for_loss'], config['tracking']['sil_thres'],
                                                    config['tracking']['use_l1'], config['tracking']['ignore_outlier_depth_loss'], tracking=True, 
                                                    plot_dir=eval_dir, visualize_tracking_loss=config['tracking']['visualize_tracking_loss'],
-                                                   tracking_iteration=iter, yolo_model=yolo_model, yolo_mapping=yolo_mapping, yolo_tracking=yolo_tracking)
+                                                   tracking_iteration=iter, yolo_model=yolo_model, yolo_mapping=yolo_mapping, yolo_tracking=yolo_tracking,
+                                                   yolo_boxmask=yolo_boxmask, yolo_dilation=yolo_dilation)
                 if config['use_wandb']:
                     # Report Loss
                     wandb_tracking_step = report_loss(losses, wandb_run, wandb_tracking_step, tracking=True)
@@ -843,7 +886,9 @@ def rgbd_slam(config: dict):
                 params, variables = add_new_gaussians(params, variables, densify_curr_data, 
                                                       config['mapping']['sil_thres'], time_idx,
                                                       config['mean_sq_dist_method'],
-                                                      yolo_mapping=yolo_mapping, yolo_model=yolo_model)
+                                                      yolo_mapping=yolo_mapping, yolo_model=yolo_model,
+                                                      yolo_boxmask= yolo_boxmask,
+                                                      yolo_dilation=yolo_dilation)
                 post_num_pts = params['means3D'].shape[0]
                 if config['use_wandb']:
                     wandb_run.log({"Mapping/Number of Gaussians": post_num_pts,
@@ -899,7 +944,8 @@ def rgbd_slam(config: dict):
                 loss, variables, losses = get_loss(params, iter_data, variables, iter_time_idx, config['mapping']['loss_weights'],
                                                 config['mapping']['use_sil_for_loss'], config['mapping']['sil_thres'],
                                                 config['mapping']['use_l1'], config['mapping']['ignore_outlier_depth_loss'], mapping=True,
-                                                yolo_model=yolo_model, yolo_mapping=yolo_mapping, yolo_tracking=yolo_tracking)
+                                                yolo_model=yolo_model, yolo_mapping=yolo_mapping, yolo_tracking=yolo_tracking,
+                                                yolo_boxmask=yolo_boxmask, yolo_dilation=yolo_dilation)
                 if config['use_wandb']:
                     # Report Loss
                     wandb_mapping_step = report_loss(losses, wandb_run, wandb_mapping_step, mapping=True)
@@ -1053,15 +1099,16 @@ if __name__ == "__main__":
         os.path.basename(args.experiment), args.experiment
     ).load_module()
 
-    # Set Experiment Seed
-    seed_everything(seed=experiment.config['seed'])
-    
-    # Create Results Directory and Copy Config
-    results_dir = os.path.join(
-        experiment.config["workdir"], experiment.config["run_name"]
-    )
-    if not experiment.config['load_checkpoint']:
-        os.makedirs(results_dir, exist_ok=True)
-        shutil.copy(args.experiment, os.path.join(results_dir, "config.py"))
+    for i,cfg in enumerate(experiment.configs):
+        # Set Experiment Seed
+        seed_everything(seed=cfg['seed'])
+        
+        # Create Results Directory and Copy Config
+        results_dir = os.path.join(
+            cfg["workdir"], cfg["run_name"]
+        )
+        if not cfg['load_checkpoint']:
+            os.makedirs(results_dir, exist_ok=True)
+            shutil.copy(args.experiment, os.path.join(results_dir, "config.py"))
 
-    rgbd_slam(experiment.config)
+        rgbd_slam(cfg)
