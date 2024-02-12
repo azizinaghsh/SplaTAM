@@ -201,7 +201,7 @@ def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio, mea
     # Get Initial Point Cloud (PyTorch CUDA Tensor)
     mask = (depth > 0) # Mask out invalid depth values
     yolo_mask = torch.ones(mask.shape, dtype=torch.bool, device='cuda').detach()
-    if yolo_mapping:
+    if yolo_mapping or inpainting:
         yolo_result = yolo_model(color.unsqueeze(dim=0), verbose=False)[0]
         for obj in yolo_result:
             if obj.boxes.cls.item() == 0:
@@ -228,10 +228,10 @@ def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio, mea
 def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_for_loss,
              sil_thres, use_l1,ignore_outlier_depth_loss, tracking=False, 
              mapping=False, do_ba=False, plot_dir=None, visualize_tracking_loss=False, tracking_iteration=None,
-             yolo_model=None, yolo_tracking=False, yolo_mapping=False):
+             yolo_model=None, yolo_tracking=False, yolo_mapping=False, inpainting=False):
     # Initialize Loss Dictionary
     losses = {}
-
+                 
     if tracking:
         # Get current frame Gaussians, where only the camera pose gets gradient
         transformed_pts = transform_to_frame(params, iter_time_idx, 
@@ -272,7 +272,7 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
     depth_sq = depth_sil[2, :, :].unsqueeze(0)
     uncertainty = depth_sq - depth**2
     uncertainty = uncertainty.detach()
-
+        
     # Mask with valid depth values (accounts for outlier depth values)
     nan_mask = (~torch.isnan(depth)) & (~torch.isnan(uncertainty))
     if ignore_outlier_depth_loss:
@@ -287,14 +287,19 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
         mask = mask & presence_sil_mask
     
     
+                 
     yolo_mask = torch.ones(mask.shape, dtype=torch.bool, device='cuda').detach()
-    if yolo_mapping or yolo_tracking:
+    if yolo_mapping or yolo_tracking or inpainting:
         yolo_result = yolo_model(curr_data['im'].unsqueeze(dim=0), verbose=False)[0]
         for obj in yolo_result:
             if obj.boxes.cls.item() == 0: #TODO: Read from dict made from csv
                 yolo_mask = yolo_mask & (~obj.masks.data.bool())
 
-
+    if inpainting:
+        curr_data['depth'] = curr_data['depth'][yolo_mask] + im[~yolo_mask]
+        curr_data['im'] = curr_data['im'][yolo_mask] + depth[~yolo_mask]                  
+                 
+                 
     # Depth loss
     if use_l1:
         mask = mask.detach()
@@ -745,7 +750,7 @@ def rgbd_slam(config: dict):
                                                    config['tracking']['use_sil_for_loss'], config['tracking']['sil_thres'],
                                                    config['tracking']['use_l1'], config['tracking']['ignore_outlier_depth_loss'], tracking=True, 
                                                    plot_dir=eval_dir, visualize_tracking_loss=config['tracking']['visualize_tracking_loss'],
-                                                   tracking_iteration=iter, yolo_model=yolo_model, yolo_mapping=yolo_mapping, yolo_tracking=yolo_tracking)
+                                                   tracking_iteration=iter, yolo_model=yolo_model, yolo_mapping=yolo_mapping, yolo_tracking=yolo_tracking, inpainting=inpainting)
                 if config['use_wandb']:
                     # Report Loss
                     wandb_tracking_step = report_loss(losses, wandb_run, wandb_tracking_step, tracking=True)
@@ -899,7 +904,7 @@ def rgbd_slam(config: dict):
                 loss, variables, losses = get_loss(params, iter_data, variables, iter_time_idx, config['mapping']['loss_weights'],
                                                 config['mapping']['use_sil_for_loss'], config['mapping']['sil_thres'],
                                                 config['mapping']['use_l1'], config['mapping']['ignore_outlier_depth_loss'], mapping=True,
-                                                yolo_model=yolo_model, yolo_mapping=yolo_mapping, yolo_tracking=yolo_tracking)
+                                                yolo_model=yolo_model, yolo_mapping=yolo_mapping, yolo_tracking=yolo_tracking, inpainting=inpainting)
                 if config['use_wandb']:
                     # Report Loss
                     wandb_mapping_step = report_loss(losses, wandb_run, wandb_mapping_step, mapping=True)
