@@ -23,13 +23,15 @@ queue = [dict(scene_name="freiburg3_sitting_rpy",
              yolo_mapping=True,
              yolo_tracking=True,
              yolo_boxmask=True,
-             yolo_dilation=None),
+             yolo_dilation=None,
+             inpainting=False),
              
              dict(scene_name="freiburg3_sitting_rpy",
              yolo_mapping=False,
              yolo_tracking=True,
              yolo_boxmask=True,
-             yolo_dilation=None)]
+             yolo_dilation=None,
+             inpainting=False)]
 
 group_name = "TUM"
 
@@ -52,6 +54,7 @@ for i,expr in enumerate(queue):
     yolo_tracking=expr["yolo_tracking"],
     yolo_dilation=expr["yolo_dilation"],
     yolo_boxmask=expr["yolo_boxmask"],
+    inpainting = expr['inpainting']
     primary_device=primary_device,
     map_every=map_every, # Mapping every nth frame
     keyframe_every=keyframe_every, # Keyframe every nth frame
