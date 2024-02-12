@@ -12,21 +12,22 @@ scene_name = scenes[int(0)]
 map_every = 1
 keyframe_every = 5
 mapping_window_size = 20
-tracking_iters = 200
+tracking_iters = 100
 mapping_iters = 30
 scene_radius_depth_ratio = 2
 
 yolo_mapping = True
 yolo_tracking = True
+inpainting = True
 
 
 group_name = "TUM"
-run_name = f"{scene_name}_seed{seed}_yolomap{yolo_mapping}_yolotrack{yolo_tracking}"
+run_name = f"{scene_name}_seed{seed}_inpainting{inpainting}"
 
 config = dict(
     workdir=f"./experiments/{group_name}",
     run_name=run_name,
-#    max_frames=10,
+    max_frames=100,
     seed=seed,
     yolo_mapping=yolo_mapping,
     yolo_tracking=yolo_tracking,
