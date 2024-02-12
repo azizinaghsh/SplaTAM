@@ -173,7 +173,7 @@ def initialize_optimizer(params, lrs_dict, tracking):
         return torch.optim.Adam(param_groups, lr=0.0, eps=1e-15)
 
 
-def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio, mean_sq_dist_method, densify_dataset=None, yolo_mapping=False, yolo_model=None):
+def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio, mean_sq_dist_method, densify_dataset=None, yolo_mapping=False, yolo_model=None, inpainting=False):
     # Get RGB-D Data & Camera Parameters
     color, depth, intrinsics, pose = dataset[0]
 
@@ -294,19 +294,23 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
         for obj in yolo_result:
             if obj.boxes.cls.item() == 0: #TODO: Read from dict made from csv
                 yolo_mask = yolo_mask & (~obj.masks.data.bool())
-
+                
+    im_gt = curr_data['im']
+    depth_gt = curr_data['depth']
     if inpainting:
-        curr_data['depth'] = curr_data['depth'][yolo_mask] + im[~yolo_mask]
-        curr_data['im'] = curr_data['im'][yolo_mask] + depth[~yolo_mask]                  
-                 
+        yolo_mask = yolo_mask.detach()
+        depth_gt = curr_data['depth'] * yolo_mask.int() + depth.detach() * (~yolo_mask).int()
+        yolo_mask = torch.tile(yolo_mask, (3, 1, 1))
+        im_masked = im.detach() * (~yolo_mask).int()        
+        im_gt = curr_data['im'] * yolo_mask.int() +  im_masked 
                  
     # Depth loss
     if use_l1:
         mask = mask.detach()
         if tracking:
-            losses['depth'] = torch.abs(curr_data['depth'] - depth)[mask].sum()
+            losses['depth'] = torch.abs(depth_gt - depth)[mask].sum()
         else:
-            losses['depth'] = torch.abs(curr_data['depth'] - depth)[mask].mean()
+            losses['depth'] = torch.abs(depth_gt - depth)[mask].mean()
     
     # RGB Loss
     if tracking and (use_sil_for_loss or ignore_outlier_depth_loss):
@@ -314,20 +318,20 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
             mask = mask & yolo_mask.detach()
         color_mask = torch.tile(mask, (3, 1, 1))
         color_mask = color_mask.detach()
-        losses['im'] = torch.abs(curr_data['im'] - im)[color_mask].sum()
+        losses['im'] = torch.abs(im_gt - im)[color_mask].sum()
     elif tracking:
         if yolo_tracking:
             yolo_mask = torch.tile(yolo_mask, (3, 1, 1))
-            losses['im'] = torch.abs(curr_data['im'] - im)[yolo_mask].sum()
+            losses['im'] = torch.abs(im_gt - im)[yolo_mask].sum()
         else:
-            losses['im'] = torch.abs(curr_data['im'] - im).sum()
+            losses['im'] = torch.abs(im_gt - im).sum()
     else:
         if yolo_mapping:
             yolo_mask = torch.tile(yolo_mask, (3, 1, 1))
-            #losses['im'] = 0.8 * l1_loss_v1(im[yolo_mask], curr_data['im'][yolo_mask]) + 0.2 * (1.0 - calc_ssim(im[yolo_mask], curr_data['im'][yolo_mask]))
-            losses['im'] = 0.8 * l1_loss_v1(im* yolo_mask.int(), curr_data['im'] * yolo_mask.int()) + 0.2 * (1.0 - calc_ssim(im*yolo_mask.int(), curr_data['im']*yolo_mask.int()))
+            #losses['im'] = 0.8 * l1_loss_v1(im[yolo_mask], im_gt[yolo_mask]) + 0.2 * (1.0 - calc_ssim(im[yolo_mask], im_gt[yolo_mask]))
+            losses['im'] = 0.8 * l1_loss_v1(im* yolo_mask.int(), im_gt * yolo_mask.int()) + 0.2 * (1.0 - calc_ssim(im*yolo_mask.int(), im_gt*yolo_mask.int()))
         else:
-            losses['im'] = 0.8 * l1_loss_v1(im, curr_data['im']) + 0.2 * (1.0 - calc_ssim(im, curr_data['im']))
+            losses['im'] = 0.8 * l1_loss_v1(im, im_gt) + 0.2 * (1.0 - calc_ssim(im, im_gt))
 
     # Visualize the Diff Images
     if tracking and visualize_tracking_loss:
@@ -427,7 +431,7 @@ def add_new_gaussians(params, variables, curr_data, sil_thres, time_idx, mean_sq
     non_presence_mask = non_presence_sil_mask | non_presence_depth_mask
     # Flatten mask
     yolo_mask = torch.ones(non_presence_mask.shape, dtype=torch.bool, device='cuda').detach()
-    if yolo_mapping:
+    if yolo_mapping or inpainting:
         yolo_result = yolo_model(curr_data['im'].unsqueeze(dim=0), verbose=False)[0]
         for obj in yolo_result:
             if obj.boxes.cls.item() == 0:
@@ -525,8 +529,9 @@ def rgbd_slam(config: dict):
     #yolo init
     yolo_mapping = config['yolo_mapping']
     yolo_tracking = config['yolo_tracking']
+    inpainting = config['inpainting']
     yolo_model = None
-    if yolo_mapping or yolo_tracking:
+    if yolo_mapping or yolo_tracking or inpainting:
         yolo_dir_path = '/home/toudo/'
         yolo_model_name = 'yolov8n-seg.pt'
         yolo_path = os.path.join(yolo_dir_path, yolo_model_name)
@@ -611,14 +616,16 @@ def rgbd_slam(config: dict):
                                                                         config['mean_sq_dist_method'],
                                                                         densify_dataset=densify_dataset,
                                                                         yolo_mapping=yolo_mapping,
-                                                                        yolo_model = yolo_model)                                                                                                                  
+                                                                        yolo_model = yolo_model,
+                                                                        inpainting=inpainting)                                                                                                                  
     else:
         # Initialize Parameters & Canoncial Camera parameters
         params, variables, intrinsics, first_frame_w2c, cam = initialize_first_timestep(dataset, num_frames, 
                                                                                         config['scene_radius_depth_ratio'],
                                                                                         config['mean_sq_dist_method'],
                                                                                         yolo_mapping = yolo_mapping,
-                                                                                        yolo_model = yolo_model)
+                                                                                        yolo_model = yolo_model,
+                                                                                        inpainting = inpainting)
     
     # Init seperate dataloader for tracking if required
     if seperate_tracking_res:
