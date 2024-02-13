@@ -446,7 +446,7 @@ def initialize_new_params(new_pt_cld, mean3_sq_dist):
 
 
 def add_new_gaussians(params, variables, curr_data, sil_thres, time_idx, mean_sq_dist_method,
-                      yolo_mapping=True, yolo_model=None, yolo_boxmask=True, yolo_dilation=None):
+                      yolo_mapping=True, yolo_model=None, yolo_boxmask=True, yolo_dilation=None, inpainting=False):
     # Silhouette Rendering
     transformed_pts = transform_to_frame(params, time_idx, gaussians_grad=False, camera_grad=False)
     depth_sil_rendervar = transformed_params2depthplussilhouette(params, curr_data['w2c'],
@@ -900,7 +900,8 @@ def rgbd_slam(config: dict):
                                                       config['mean_sq_dist_method'],
                                                       yolo_mapping=yolo_mapping, yolo_model=yolo_model,
                                                       yolo_boxmask= yolo_boxmask,
-                                                      yolo_dilation=yolo_dilation)
+                                                      yolo_dilation=yolo_dilation,
+                                                      inpainting=inpainting)
                 post_num_pts = params['means3D'].shape[0]
                 if config['use_wandb']:
                     wandb_run.log({"Mapping/Number of Gaussians": post_num_pts,
